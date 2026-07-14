@@ -48,6 +48,7 @@ Este projeto é uma ferramenta web interativa desenvolvida com **FastAPI** e **V
 ```text
 Dados_interruptacao_energia/
 ├── main.py               # Servidor FastAPI & APIs de raspagem de dados
+├── google_apps_script.js # Código JavaScript para o Google Apps Script
 ├── static/               # Arquivos públicos do Frontend
 │   ├── index.html        # Estrutura principal da página web
 │   ├── style.css         # Folha de estilo CSS (Design & Efeitos)
@@ -86,6 +87,45 @@ O servidor iniciará automaticamente na porta **8555**. Caso queira alterar a po
 ### 4. Acesso à Interface
 Abra o navegador e navegue até:
 [http://localhost:8555](http://localhost:8555)
+
+---
+
+## 📊 Integração com Google Sheets & Google Apps Script
+
+Devido aos bloqueios de segurança (WAF) das concessionárias sobre servidores em nuvem, você pode usar o **Google Apps Script** rodando diretamente nos servidores da Google como coletor de dados intermediário. O script coleta as informações sem bloqueios, salva um histórico em uma planilha do Google Sheets e envia os dados consolidados para o seu servidor FastAPI.
+
+### Passo 1: Criar a Planilha do Google
+1. Crie uma nova planilha vazia no seu Google Drive.
+2. Nomeie o arquivo como quiser (ex: `Monitoramento de Energia`).
+3. O script criará automaticamente duas abas:
+   - **`Atual`**: Mostra apenas o snapshot ativo e atualizado do momento.
+   - **`Histórico`**: Registra o histórico cumulativo de todas as coletas.
+
+### Passo 2: Configurar o Google Apps Script
+1. Na sua planilha, vá em **Extensões** > **Apps Script**.
+2. Apague qualquer código existente e cole o conteúdo do arquivo [google_apps_script.js](file:///home/erick/Documentos/Projetos/Dados_interruptacao_energia/google_apps_script.js).
+3. Salve o projeto do script.
+
+### Passo 3: Configurar as Propriedades do Script
+1. No menu lateral esquerdo do Apps Script, clique no ícone de engrenagem ⚙️ (**Configurações do Projeto**).
+2. Role a página até **Propriedades do script** e clique em **Adicionar propriedade**.
+3. Adicione as seguintes propriedades:
+   - **Propriedade**: `SERVER_URL` | **Valor**: `https://seu-projeto-da-railway.up.railway.app` (sua URL de produção)
+   - **Propriedade**: `API_KEY` | **Valor**: `sua-chave-secreta` (a mesma definida na variável de ambiente `API_KEY` na Railway)
+4. Clique em **Salvar propriedades do script**.
+
+### Passo 4: Configurar o Disparador Automático (Trigger)
+1. No menu lateral esquerdo do Apps Script, clique no ícone de relógio ⏰ (**Acionadores**).
+2. Clique em **Adicionar acionador** no canto inferior direito.
+3. Escolha a função a ser executada: **`syncData`**.
+4. Selecione a origem do evento: **`Baseado no tempo`**.
+5. Selecione o tipo de acionador baseado no tempo: **`Temporizador de hora em hora`** ou **`Temporizador de minutos`** (ex: a cada 30 minutos).
+6. Clique em **Salvar** (se solicitado, autorize as permissões necessárias de acesso da sua conta Google).
+
+### Passo 5: Configurar o Servidor (Railway)
+Nas variáveis de ambiente da sua aplicação na Railway, defina:
+- **`DISABLE_API_FETCH`**: `true`
+- Isso instrui a Railway a desativar a busca direta das APIs externas (evitando logs de erro `403` no console) e depender exclusivamente da ingestão de dados limpos vinda do Google Apps Script.
 
 ---
 
