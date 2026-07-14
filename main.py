@@ -603,10 +603,13 @@ def ingest_data(req: IngestRequest):
 @app.get("/")
 def read_root():
     """Serve the index.html page."""
-    return FileResponse("static/index.html")
+    if os.path.exists("static/index.html"):
+        return FileResponse("static/index.html")
+    return {"message": "Static content not available"}
 
 # Mount static folder
-app.mount("/static", StaticFiles(directory="static"), name="static")
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     import uvicorn
