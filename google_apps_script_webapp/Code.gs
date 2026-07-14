@@ -1,11 +1,7 @@
 /**
  * Código Principal para o Google Apps Script (Code.gs)
  * 
- * Este arquivo contém as funções do backend do seu Web App no Google Apps Script:
- * 1. doGet(): Serve a página do painel (index.html).
- * 2. getEnergyData(forceRefresh): Retorna os dados agregados das concessionárias (CEEE/CPFL),
- *    buscando novas informações ou recorrendo à planilha em caso de indisponibilidade das APIs.
- * 3. syncData(): Executa a sincronização periódica e atualiza a planilha em segundo plano.
+ * Este arquivo contém as funções do backend do seu Web App no Google Apps Script.
  */
 
 function doGet() {
@@ -13,6 +9,26 @@ function doGet() {
       .evaluate()
       .setTitle('Painel de Interrupções de Energia')
       .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+// Auxiliar para obter a planilha ativa (funciona em scripts vinculados ou autônomos com ID)
+function getSpreadsheet() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) return ss;
+  } catch (e) {}
+  
+  var scriptProperties = PropertiesService.getScriptProperties();
+  var sheetId = scriptProperties.getProperty("SPREADSHEET_ID");
+  if (sheetId) {
+    return SpreadsheetApp.openById(sheetId);
+  }
+  
+  throw new Error(
+    "Não foi possível encontrar a Planilha ativa. " +
+    "Certifique-se de que o script foi aberto a partir de uma Planilha (Extensões > Apps Script) " +
+    "ou configure a propriedade SPREADSHEET_ID nas configurações do projeto."
+  );
 }
 
 // Auxiliares de Tratamento
@@ -199,48 +215,57 @@ function fetchCpflData() {
 
 // Leitura da Planilha em caso de Falha
 function getLatestFromSheet() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("Atual");
-  if (!sheet) return [];
-  
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return [];
-  
-  var values = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
-  var items = [];
-  
-  values.forEach(function(row) {
-    var concessionaria = row[1];
-    var nome = row[2];
-    var estado = row[3];
-    var ocorrencias = Number(row[4]) || 0;
-    var unidadesAfetadas = Number(row[5]) || 0;
-    var equipes = Number(row[6]) || 0;
+  try {
+    var ss = getSpreadsheet();
+    var sheet = ss.getSheetByName("Atual");
+    if (!sheet) return [];
     
-    items.push({
-      "id": (concessionaria === "CEEE Equatorial" ? "ceee-" : "cpfl-") + nome.toLowerCase().replace(/ /g, "_"),
-      "nome": nome,
-      "concessionaria": concessionaria,
-      "estado": estado,
-      "ocorrencias": ocorrencias,
-      "unidades_afetadas": unidadesAfetadas,
-      "equipes": equipes,
-      "bairros": [] // Bairros não persistidos de forma detalhada na planilha simples
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return [];
+    
+    var values = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+    var items = [];
+    
+    values.forEach(function(row) {
+      var concessionaria = row[1];
+      var nome = row[2];
+      var estado = row[3];
+      var ocorrencias = Number(row[4]) || 0;
+      var unidadesAfetadas = Number(row[5]) || 0;
+      var equipes = Number(row[6]) || 0;
+      
+      items.push({
+        "id": (concessionaria === "CEEE Equatorial" ? "ceee-" : "cpfl-") + nome.toLowerCase().replace(/ /g, "_"),
+        "nome": nome,
+        "concessionaria": concessionaria,
+        "estado": estado,
+        "ocorrencias": ocorrencias,
+        "unidades_afetadas": unidadesAfetadas,
+        "equipes": equipes,
+        "bairros": [] // Bairros detalhados não são armazenados na planilha resumida
+      });
     });
-  });
-  return items;
+    return items;
+  } catch (e) {
+    Logger.log("Erro ao ler da planilha: " + e);
+    return [];
+  }
 }
 
-// Chamada Principal do Frontend
+// Chamada Principal do Frontend com cache de 2 minutos
 function getEnergyData(forceRefresh) {
-  var now = new Date();
-  var ceeeItems = null;
-  var cpflItems = null;
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get("energy_data_json");
   
-  if (forceRefresh) {
-    ceeeItems = fetchCeeeData();
-    cpflItems = fetchCpflData();
+  if (!forceRefresh && cached) {
+    Logger.log("Retornando dados do CacheService...");
+    return JSON.parse(cached);
   }
+  
+  var now = new Date();
+  Logger.log("Buscando dados frescos das APIs...");
+  var ceeeItems = fetchCeeeData();
+  var cpflItems = fetchCpflData();
   
   var isCeeeFresh = ceeeItems !== null;
   var isCpflFresh = cpflItems !== null;
@@ -254,8 +279,8 @@ function getEnergyData(forceRefresh) {
   
   var combined = ceeeItems.concat(cpflItems);
   
-  // Salva no Sheets se pelo menos uma API obteve sucesso
-  if (forceRefresh && (isCeeeFresh || isCpflFresh)) {
+  // Salva na planilha se pelo menos uma API funcionou
+  if (isCeeeFresh || isCpflFresh) {
     saveToSheet(combined);
   }
   
@@ -274,50 +299,63 @@ function getEnergyData(forceRefresh) {
     statusStr = "fallback";
   }
   
-  return {
+  var response = {
     "status": statusStr,
     "timestamp": now.toISOString(),
     "data": combined
   };
+  
+  // Salva no cache por 2 minutos (120 segundos)
+  try {
+    cache.put("energy_data_json", JSON.stringify(response), 120);
+  } catch (e) {
+    Logger.log("Erro ao salvar no CacheService: " + e);
+  }
+  
+  return response;
 }
 
 // Gravação em Planilha
 function saveToSheet(items) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  var sheetAtual = ss.getSheetByName("Atual");
-  if (!sheetAtual) {
-    sheetAtual = ss.insertSheet("Atual");
-  }
-  sheetAtual.clear();
-  sheetAtual.appendRow(["Atualizado Em", "Concessionária", "Município", "Estado", "Ocorrências", "Clientes Afetados", "Equipes"]);
-  
-  var sheetHistorico = ss.getSheetByName("Histórico");
-  if (!sheetHistorico) {
-    sheetHistorico = ss.insertSheet("Histórico");
-    sheetHistorico.appendRow(["Timestamp", "Concessionária", "Município", "Estado", "Ocorrências", "Clientes Afetados", "Equipes"]);
-  }
-  
-  var timestamp = new Date();
-  var rowsData = [];
-  
-  items.forEach(function(item) {
-    rowsData.push([
-      timestamp,
-      item.concessionaria,
-      item.nome,
-      item.estado,
-      item.ocorrencias,
-      item.unidades_afetadas,
-      item.equipes
-    ]);
-  });
-  
-  if (rowsData.length > 0) {
-    sheetAtual.getRange(2, 1, rowsData.length, rowsData[0].length).setValues(rowsData);
+  try {
+    var ss = getSpreadsheet();
     
-    var lastRow = sheetHistorico.getLastRow();
-    sheetHistorico.getRange(lastRow + 1, 1, rowsData.length, rowsData[0].length).setValues(rowsData);
+    var sheetAtual = ss.getSheetByName("Atual");
+    if (!sheetAtual) {
+      sheetAtual = ss.insertSheet("Atual");
+    }
+    sheetAtual.clear();
+    sheetAtual.appendRow(["Atualizado Em", "Concessionária", "Município", "Estado", "Ocorrências", "Clientes Afetados", "Equipes"]);
+    
+    var sheetHistorico = ss.getSheetByName("Histórico");
+    if (!sheetHistorico) {
+      sheetHistorico = ss.insertSheet("Histórico");
+      sheetHistorico.appendRow(["Timestamp", "Concessionária", "Município", "Estado", "Ocorrências", "Clientes Afetados", "Equipes"]);
+    }
+    
+    var timestamp = new Date();
+    var rowsData = [];
+    
+    items.forEach(function(item) {
+      rowsData.push([
+        timestamp,
+        item.concessionaria,
+        item.nome,
+        item.estado,
+        item.ocorrencias,
+        item.unidades_afetadas,
+        item.equipes
+      ]);
+    });
+    
+    if (rowsData.length > 0) {
+      sheetAtual.getRange(2, 1, rowsData.length, rowsData[0].length).setValues(rowsData);
+      
+      var lastRow = sheetHistorico.getLastRow();
+      sheetHistorico.getRange(lastRow + 1, 1, rowsData.length, rowsData[0].length).setValues(rowsData);
+    }
+  } catch (e) {
+    Logger.log("Erro ao salvar na planilha: " + e);
   }
 }
 
