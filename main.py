@@ -13,6 +13,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
+from curl_cffi import requests
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -203,7 +205,7 @@ def map_ibge_to_state(ibge_code: int) -> str:
     }
     return states.get(prefix, "Desconhecido")
 
-def fetch_ceee_data() -> List[dict]:
+def fetch_ceee_data() -> Optional[List[dict]]:
     """Fetch and aggregate CEEE Equatorial data."""
     url = "https://ceee.equatorialenergia.com.br/api-etr/resumo?nivel=bairro&estado=RS"
     headers = {
@@ -215,67 +217,68 @@ def fetch_ceee_data() -> List[dict]:
     
     logger.info("Fetching CEEE Equatorial data...")
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with ceee_opener.open(req, timeout=15) as response:
-            content = response.read()
-            data = json.loads(content)
+        r = requests.get(url, headers=headers, impersonate="chrome", timeout=15)
+        if r.status_code != 200:
+            logger.error(f"CEEE API returned status {r.status_code}")
+            return None
             
-            grupos = data.get('grupos', [])
-            logger.info(f"CEEE returned {len(grupos)} neighborhood-level records.")
+        data = r.json()
+        grupos = data.get('grupos', [])
+        logger.info(f"CEEE returned {len(grupos)} neighborhood-level records.")
+        
+        # Aggregate by municipality
+        mun_dict = {}
+        for item in grupos:
+            mun_name = item.get('municipio_nome', '').strip().title()
+            if not mun_name:
+                continue
+                
+            bairro_name = item.get('bairro', '').strip().title()
+            estado = item.get('estado', 'RS')
+            ocorrencias = item.get('ocorrencias', 0)
+            unidades_afetadas = item.get('unidades_afetadas', 0)
+            equipes = item.get('equipes_em_campo', 0)
             
-            # Aggregate by municipality
-            mun_dict = {}
-            for item in grupos:
-                mun_name = item.get('municipio_nome', '').strip().title()
-                if not mun_name:
-                    continue
-                    
-                bairro_name = item.get('bairro', '').strip().title()
-                estado = item.get('estado', 'RS')
-                ocorrencias = item.get('ocorrencias', 0)
-                unidades_afetadas = item.get('unidades_afetadas', 0)
-                equipes = item.get('equipes_em_campo', 0)
-                
-                statuses = {}
-                por_status = item.get('por_status', {})
-                if isinstance(por_status, dict):
-                    for st_name, st_info in por_status.items():
-                        if isinstance(st_info, dict):
-                            statuses[st_name] = st_info.get('ocorrencias', 0)
-                
-                bairro_data = {
-                    "nome": bairro_name,
-                    "ocorrencias": ocorrencias,
-                    "unidades_afetadas": unidades_afetadas,
-                    "equipes": equipes,
-                    "status": statuses
+            statuses = {}
+            por_status = item.get('por_status', {})
+            if isinstance(por_status, dict):
+                for st_name, st_info in por_status.items():
+                    if isinstance(st_info, dict):
+                        statuses[st_name] = st_info.get('ocorrencias', 0)
+            
+            bairro_data = {
+                "nome": bairro_name,
+                "ocorrencias": ocorrencias,
+                "unidades_afetadas": unidades_afetadas,
+                "equipes": equipes,
+                "status": statuses
+            }
+            
+            if mun_name not in mun_dict:
+                mun_dict[mun_name] = {
+                    "id": f"ceee-{item.get('municipio_ibge', mun_name.lower().replace(' ', '_'))}",
+                    "nome": mun_name,
+                    "concessionaria": "CEEE Equatorial",
+                    "estado": estado,
+                    "ocorrencias": 0,
+                    "unidades_afetadas": 0,
+                    "equipes": 0,
+                    "bairros": []
                 }
-                
-                if mun_name not in mun_dict:
-                    mun_dict[mun_name] = {
-                        "id": f"ceee-{item.get('municipio_ibge', mun_name.lower().replace(' ', '_'))}",
-                        "nome": mun_name,
-                        "concessionaria": "CEEE Equatorial",
-                        "estado": estado,
-                        "ocorrencias": 0,
-                        "unidades_afetadas": 0,
-                        "equipes": 0,
-                        "bairros": []
-                    }
-                
-                mun_dict[mun_name]["ocorrencias"] += ocorrencias
-                mun_dict[mun_name]["unidades_afetadas"] += unidades_afetadas
-                mun_dict[mun_name]["equipes"] += equipes
-                mun_dict[mun_name]["bairros"].append(bairro_data)
-                
-            result = list(mun_dict.values())
-            logger.info(f"CEEE aggregated to {len(result)} municipalities.")
-            return result
+            
+            mun_dict[mun_name]["ocorrencias"] += ocorrencias
+            mun_dict[mun_name]["unidades_afetadas"] += unidades_afetadas
+            mun_dict[mun_name]["equipes"] += equipes
+            mun_dict[mun_name]["bairros"].append(bairro_data)
+            
+        result = list(mun_dict.values())
+        logger.info(f"CEEE aggregated to {len(result)} municipalities.")
+        return result
     except Exception as e:
         logger.error(f"Failed to fetch/parse CEEE: {e}")
         return None
 
-def fetch_cpfl_data() -> List[dict]:
+def fetch_cpfl_data() -> Optional[List[dict]]:
     """Fetch and aggregate CPFL / RGE data."""
     url = "https://www.cpfl.com.br/monitoramento-interrupcoes-fornecimento/dados"
     headers = {
@@ -284,76 +287,81 @@ def fetch_cpfl_data() -> List[dict]:
     
     logger.info("Fetching CPFL data...")
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=15) as response:
-            content = response.read()
-            data = json.loads(content)
+        r = requests.get(url, headers=headers, impersonate="chrome", timeout=15)
+        if r.status_code != 200:
+            logger.error(f"CPFL API returned status {r.status_code}")
+            return None
             
-            dados = data.get('dados', [])
-            if not dados:
-                logger.warning("CPFL response does not contain 'dados'.")
-                return []
-                
-            cities = dados[0].get('cidades', [])
-            logger.info(f"CPFL returned {len(cities)} total cities.")
+        if "Waiting Room" in r.text or "waitingroom" in r.text:
+            logger.warning("CPFL request hit Cloudflare Waiting Room.")
+            return None
             
-            result = []
-            for city in cities:
-                mun_name = city.get('nome', '').strip().title()
-                if not mun_name:
-                    continue
-                    
-                distribuidora = city.get('idDistribuidora', '').upper()
-                cod_ibge = city.get('codIbge')
-                estado = map_ibge_to_state(cod_ibge)
+        data = r.json()
+        dados = data.get('dados', [])
+        if not dados:
+            logger.warning("CPFL response does not contain 'dados'.")
+            return []
+            
+        cities = dados[0].get('cidades', [])
+        logger.info(f"CPFL returned {len(cities)} total cities.")
+        
+        result = []
+        for city in cities:
+            mun_name = city.get('nome', '').strip().title()
+            if not mun_name:
+                continue
                 
-                teams = city.get('quantidadeEquipesEmAtendimento', 0)
-                ocorrencias = 0
-                unidades_afetadas = 0
-                bairros_list = []
+            distribuidora = city.get('idDistribuidora', '').upper()
+            cod_ibge = city.get('codIbge')
+            estado = map_ibge_to_state(cod_ibge)
+            
+            teams = city.get('quantidadeEquipesEmAtendimento', 0)
+            ocorrencias = 0
+            unidades_afetadas = 0
+            bairros_list = []
+            
+            for b in city.get('bairros', []):
+                b_name = b.get('nome', '').strip().title()
+                b_events = b.get('eventos', [])
                 
-                for b in city.get('bairros', []):
-                    b_name = b.get('nome', '').strip().title()
-                    b_events = b.get('eventos', [])
-                    
-                    b_ocorrencias = len(b_events)
-                    b_afetadas = sum(e.get('quantidadeClientes', 0) for e in b_events)
-                    
-                    ocorrencias += b_ocorrencias
-                    unidades_afetadas += b_afetadas
-                    
-                    eventos_list = []
-                    for e in b_events:
-                        eventos_list.append({
-                            "numero": e.get('numeroEvento'),
-                            "status": e.get('status'),
-                            "tipo": e.get('tipo'),
-                            "duracao": e.get('duracaoOcorrencia'),
-                            "clientes": e.get('quantidadeClientes'),
-                            "hora": e.get('dataHoraEvento')
-                        })
-                        
-                    bairros_list.append({
-                        "nome": b_name,
-                        "ocorrencias": b_ocorrencias,
-                        "unidades_afetadas": b_afetadas,
-                        "eventos": eventos_list
+                b_ocorrencias = len(b_events)
+                b_afetadas = sum(e.get('quantidadeClientes', 0) for e in b_events)
+                
+                ocorrencias += b_ocorrencias
+                unidades_afetadas += b_afetadas
+                
+                eventos_list = []
+                for e in b_events:
+                    eventos_list.append({
+                        "numero": e.get('numeroEvento'),
+                        "status": e.get('status'),
+                        "tipo": e.get('tipo'),
+                        "duracao": e.get('duracaoOcorrencia'),
+                        "clientes": e.get('quantidadeClientes'),
+                        "hora": e.get('dataHoraEvento')
                     })
-                
-                if (ocorrencias > 0 or teams > 0) and estado == "RS":
-                    result.append({
-                        "id": f"cpfl-{cod_ibge or mun_name.lower().replace(' ', '_')}",
-                        "nome": mun_name,
-                        "concessionaria": "CPFL (RGE)" if distribuidora == "RGE" else f"CPFL ({distribuidora})",
-                        "estado": estado,
-                        "ocorrencias": ocorrencias,
-                        "unidades_afetadas": unidades_afetadas,
-                        "equipes": teams,
-                        "bairros": bairros_list
-                    })
+                    
+                bairros_list.append({
+                    "nome": b_name,
+                    "ocorrencias": b_ocorrencias,
+                    "unidades_afetadas": b_afetadas,
+                    "eventos": eventos_list
+                })
             
-            logger.info(f"CPFL filtered to {len(result)} cities with active outages/teams.")
-            return result
+            if (ocorrencias > 0 or teams > 0) and estado == "RS":
+                result.append({
+                    "id": f"cpfl-{cod_ibge or mun_name.lower().replace(' ', '_')}",
+                    "nome": mun_name,
+                    "concessionaria": "CPFL (RGE)" if distribuidora == "RGE" else f"CPFL ({distribuidora})",
+                    "estado": estado,
+                    "ocorrencias": ocorrencias,
+                    "unidades_afetadas": unidades_afetadas,
+                    "equipes": teams,
+                    "bairros": bairros_list
+                })
+        
+        logger.info(f"CPFL filtered to {len(result)} cities with active outages/teams.")
+        return result
     except Exception as e:
         logger.error(f"Failed to fetch/parse CPFL: {e}")
         return None
