@@ -18,7 +18,7 @@ from typing import List, Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("energy-outages-app")
 
-DB_PATH = "outages.db"
+DB_PATH = os.environ.get("DB_PATH", "outages.db")
 
 def init_db():
     """Initialize the SQLite database with required tables."""
