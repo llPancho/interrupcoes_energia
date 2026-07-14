@@ -19,6 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("energy-outages-app")
 
 DB_PATH = os.environ.get("DB_PATH", "outages.db")
+DISABLE_API_FETCH = os.environ.get("DISABLE_API_FETCH", "false").lower() == "true"
 
 def init_db():
     """Initialize the SQLite database with required tables."""
@@ -157,18 +158,23 @@ async def lifespan(app: FastAPI):
     # Startup actions
     init_db()
     
-    # Start background scheduler
-    bg_task = asyncio.create_task(hourly_background_worker())
+    # Start background scheduler only if API fetch is enabled
+    bg_task = None
+    if not DISABLE_API_FETCH:
+        bg_task = asyncio.create_task(hourly_background_worker())
+    else:
+        logger.info("Background worker disabled (DISABLE_API_FETCH=true). Server is in ingestion-only mode.")
     
     yield
     
     # Shutdown actions
-    logger.info("Shutting down background task...")
-    bg_task.cancel()
-    try:
-        await bg_task
-    except asyncio.CancelledError:
-        logger.info("Background task cancelled.")
+    if bg_task:
+        logger.info("Shutting down background task...")
+        bg_task.cancel()
+        try:
+            await bg_task
+        except asyncio.CancelledError:
+            logger.info("Background task cancelled.")
 
 app = FastAPI(title="Painel de Interrupções de Energia", lifespan=lifespan)
 
@@ -418,6 +424,30 @@ def get_data(refresh: bool = False):
         return {
             "status": "cached",
             "timestamp": cached_data["timestamp"].isoformat(),
+            "data": cached_data["items"]
+        }
+        
+    if DISABLE_API_FETCH:
+        # Ingestion-only mode: serve cached data or fallback to DB if cache is empty
+        if not cached_data["items"]:
+            cached_data["items"] = get_latest_run_from_db()
+            # Try to get the latest run timestamp from the DB
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("SELECT timestamp FROM runs ORDER BY id DESC LIMIT 1")
+                row = cursor.fetchone()
+                if row:
+                    cached_data["timestamp"] = datetime.fromisoformat(row[0])
+                else:
+                    cached_data["timestamp"] = now
+                conn.close()
+            except Exception:
+                cached_data["timestamp"] = now
+        
+        return {
+            "status": "fresh",
+            "timestamp": cached_data["timestamp"].isoformat() if cached_data["timestamp"] else now.isoformat(),
             "data": cached_data["items"]
         }
         
