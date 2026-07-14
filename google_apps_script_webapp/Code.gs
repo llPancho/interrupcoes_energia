@@ -5,8 +5,7 @@
  */
 
 function doGet() {
-  return HtmlService.createTemplateFromFile('index')
-      .evaluate()
+  return HtmlService.createHtmlOutputFromFile('index')
       .setTitle('Painel de Interrupções de Energia')
       .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
