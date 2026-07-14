@@ -88,46 +88,48 @@ O servidor iniciará automaticamente na porta **8555**. Caso queira alterar a po
 Abra o navegador e navegue até:
 [http://localhost:8555](http://localhost:8555)
 
----
+## 📊 Hospedagem 100% Gratuita no Google Apps Script (Web App)
 
-## 📊 Integração com Google Sheets & Google Apps Script
+Caso você prefira rodar o sistema de forma **totalmente independente e gratuita**, sem a necessidade de servidores externos como a Railway, Vercel ou bancos de dados locais, você pode hospedar o painel inteiro dentro do **Google Apps Script** como um **Web App**. 
 
-Devido aos bloqueios de segurança (WAF) das concessionárias sobre servidores em nuvem, você pode usar o **Google Apps Script** rodando diretamente nos servidores da Google como coletor de dados intermediário. O script coleta as informações sem bloqueios, salva um histórico em uma planilha do Google Sheets e envia os dados consolidados para o seu servidor FastAPI.
+Nesta arquitetura, a Google hospeda a interface visual e executa as buscas de APIs de forma nativa e sem bloqueios (usando os IPs do próprio ecossistema do Google), salvando e recuperando o histórico em uma **Planilha do Google Sheets**.
+
+Todos os arquivos compilados e prontos para implantação estão disponíveis na pasta [google_apps_script_webapp/](file:///home/erick/Documentos/Projetos/Dados_interruptacao_energia/google_apps_script_webapp).
 
 ### Passo 1: Criar a Planilha do Google
 1. Crie uma nova planilha vazia no seu Google Drive.
-2. Nomeie o arquivo como quiser (ex: `Monitoramento de Energia`).
-3. O script criará automaticamente duas abas:
+2. O script criará automaticamente duas abas:
    - **`Atual`**: Mostra apenas o snapshot ativo e atualizado do momento.
-   - **`Histórico`**: Registra o histórico cumulativo de todas as coletas.
+   - **`Histórico`**: Registra o histórico cumulativo de todas as coletas feitas ao longo do tempo.
 
-### Passo 2: Configurar o Google Apps Script
-1. Na sua planilha, vá em **Extensões** > **Apps Script**.
-2. Apague qualquer código existente e cole o conteúdo do arquivo [google_apps_script.js](file:///home/erick/Documentos/Projetos/Dados_interruptacao_energia/google_apps_script.js).
-3. Salve o projeto do script.
+### Passo 2: Configurar o Apps Script
+1. Na sua planilha, acesse **Extensões** > **Apps Script**.
+2. No menu lateral do editor do Apps Script, crie exatamente dois arquivos:
+   * **Arquivo de Script (`Code.gs`)**: Crie um arquivo chamado `Code` e cole as instruções de [Code.gs](file:///home/erick/Documentos/Projetos/Dados_interruptacao_energia/google_apps_script_webapp/Code.gs).
+   * **Arquivo HTML (`index.html`)**: Crie um arquivo HTML chamado `index` e cole o código contido no arquivo compilado [index.html](file:///home/erick/Documentos/Projetos/Dados_interruptacao_energia/google_apps_script_webapp/index.html).
+3. Salve o projeto do script clicando no ícone de disquete.
 
-### Passo 3: Configurar as Propriedades do Script
-1. No menu lateral esquerdo do Apps Script, clique no ícone de engrenagem ⚙️ (**Configurações do Projeto**).
-2. Role a página até **Propriedades do script** e clique em **Adicionar propriedade**.
-3. Adicione as seguintes propriedades:
-   - **Propriedade**: `SERVER_URL` | **Valor**: `https://seu-projeto-da-railway.up.railway.app` (sua URL de produção)
-   - **Propriedade**: `API_KEY` | **Valor**: `sua-chave-secreta` (a mesma definida na variável de ambiente `API_KEY` na Railway)
-4. Clique em **Salvar propriedades do script**.
-
-### Passo 4: Configurar o Disparador Automático (Trigger)
+### Passo 3: Configurar o Disparador Automático (Trigger)
+Para garantir que as informações sejam coletadas e salvas na planilha em segundo plano:
 1. No menu lateral esquerdo do Apps Script, clique no ícone de relógio ⏰ (**Acionadores**).
 2. Clique em **Adicionar acionador** no canto inferior direito.
 3. Escolha a função a ser executada: **`syncData`**.
 4. Selecione a origem do evento: **`Baseado no tempo`**.
 5. Selecione o tipo de acionador baseado no tempo: **`Temporizador de hora em hora`** ou **`Temporizador de minutos`** (ex: a cada 30 minutos).
-6. Clique em **Salvar** (se solicitado, autorize as permissões necessárias de acesso da sua conta Google).
+6. Clique em **Salvar** e conceda as permissões de acesso solicitadas para que o script possa modificar a planilha.
 
-### Passo 5: Configurar o Servidor (Railway)
-Nas variáveis de ambiente da sua aplicação na Railway, defina:
-- **`DISABLE_API_FETCH`**: `true`
-- Isso instrui a Railway a desativar a busca direta das APIs externas (evitando logs de erro `403` no console) e depender exclusivamente da ingestão de dados limpos vinda do Google Apps Script.
+### Passo 4: Publicar o Web App
+1. No topo direito do editor do Apps Script, clique em **Implantar** > **Nova implantação**.
+2. Clique no ícone de engrenagem ⚙️ e selecione **Web App** (Aplicativo Web).
+3. Configure os campos:
+   * **Descrição**: `Painel de Energia`
+   * **Executar como**: `Eu` (sua conta do Google)
+   * **Quem tem acesso**: `Qualquer pessoa` (isso permite que você e outras pessoas acessem o painel)
+4. Clique em **Implantar**.
+5. Copie a **URL do web app** gerada. Abra esta URL no seu navegador e o seu painel estará online e funcionando!
 
 ---
+
 
 ## 🔗 Referência das APIs de Origem
 
