@@ -538,7 +538,29 @@ def generate_whatsapp(req: WhatsappRequest):
         
     return {"text": "\n".join(text_lines)}
 
-# Stats page endpoints removed
+class IngestRequest(BaseModel):
+    api_key: str
+    items: List[dict]
+
+@app.post("/api/ingest")
+def ingest_data(req: IngestRequest):
+    """Ingest fresh data from a local script to bypass WAF IP block."""
+    api_key_env = os.environ.get("API_KEY")
+    if not api_key_env or req.api_key != api_key_env:
+        raise HTTPException(status_code=401, detail="Chave de API inválida ou não configurada.")
+        
+    combined = req.items
+    
+    # Save to SQLite database
+    save_run_to_db(combined)
+    
+    # Update Cache
+    combined.sort(key=lambda x: (-x["ocorrencias"], x["nome"]))
+    cached_data["timestamp"] = datetime.now()
+    cached_data["items"] = combined
+    
+    logger.info(f"Ingested {len(combined)} records successfully via API.")
+    return {"status": "success", "count": len(combined)}
 
 @app.get("/")
 def read_root():
