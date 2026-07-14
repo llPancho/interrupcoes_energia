@@ -261,6 +261,26 @@ function getEnergyData(forceRefresh) {
     return JSON.parse(cached);
   }
   
+  // Se não for forceRefresh, tenta primeiro ler da planilha para carregar instantaneamente (Fast Load)
+  if (!forceRefresh) {
+    var sheetItems = getLatestFromSheet();
+    if (sheetItems && sheetItems.length > 0) {
+      Logger.log("Retornando dados carregados da Planilha (Carregamento rápido)...");
+      var fastResponse = {
+        "status": "partial_fallback",
+        "timestamp": new Date().toISOString(),
+        "data": sheetItems
+      };
+      
+      // Salva no cache por 2 minutos para evitar leituras repetidas da planilha
+      try {
+        cache.put("energy_data_json", JSON.stringify(fastResponse), 120);
+      } catch (e) {}
+      
+      return fastResponse;
+    }
+  }
+  
   var now = new Date();
   Logger.log("Buscando dados frescos das APIs...");
   var ceeeItems = fetchCeeeData();
